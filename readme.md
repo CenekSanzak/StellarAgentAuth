@@ -38,7 +38,7 @@ Events & Audit History
 
 The verification layer checks the AI agent's identity or attestations. The policy layer defines what the agent is allowed to do, such as spending limits, allowed assets, approved addresses, expiration, and revocation. The Soroban smart wallet enforces these rules before executing transactions.
 
-## Grant Deliverables
+## Deliverables
 
 - **Stellar-compatible ERC-8126 implementation** for AI agent verification and attestations.
 - **Stellar-compatible ERC-8196 implementation** for policy-based AI agent wallet authorization.
