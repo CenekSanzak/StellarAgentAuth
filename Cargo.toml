@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "contracts/agent-registry",
+    "contracts/verification-registry",
+    "contracts/smart-wallet",
+    "contracts/demo-service",
+    "contracts/shared-types",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+publish = false
