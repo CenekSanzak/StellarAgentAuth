@@ -1,86 +1,102 @@
 # Architecture
 
-This is the proposed design for Stellar AI Agent Verification & Authenticated Wallet. It lets an owner give an AI agent limited access to funds without sharing the owner's private key.
+This project lets a wallet owner give an AI agent limited permission to use funds on Stellar. The owner keeps control of the wallet, while the agent can perform only the actions the owner has approved.
 
-## What we take from the EIPs
+**Current status:** The repository contains folders, package configuration, and placeholder modules. The behavior below is the planned design; contracts and services are not implemented or deployed yet.
 
-[ERC-8126](https://eips.ethereum.org/EIPS/eip-8126) describes off-chain agent verification. Providers resolve an agent's registered metadata, assess applicable token, media, code, web, and wallet risks, and produce a risk score from 0 to 100. Lower scores mean lower risk. It also describes privacy proofs and uses ERC-8004 identities.
+## Design overview
 
-[ERC-8196](https://eips.ethereum.org/EIPS/eip-8196) describes policy-controlled execution. The wallet checks current verification before each action, enforces the owner's limits, and keeps an audit history linked by hashes. Its `minVerificationScore` is actually an upper risk limit; we call this `max_risk_score`.
-
-We adapt these ideas to Stellar addresses, Soroban authorization, and Stellar assets. The first release implements a defined subset, not full ERC compatibility. Privacy proofs, entropy commit-reveal, and TLS credential delegation are future work.
-
-## Main components
+The system separates two decisions: whether an agent has passed verification, and whether a particular action is allowed. Passing verification does not give an agent permission to spend.
 
 ```text
-Owner → Register agent → Verify agent → Approve policy
-                                             ↓
-Agent → Sign action → Soroban wallet → Approved asset or contract
-                          ↓
-                   Events and history
+Agent controller → Agent registry → Verification service
+                                            ↓
+                                    Verification registry
+                                            ↑
+Wallet owner → Approve policy → Smart wallet ← Signed agent action
+                                    ↓
+                           Approved asset or contract
+                                    ↓
+                            Events → History service
 ```
 
-| Component | Role |
+The agent controller manages the agent's identity. The wallet owner controls the funds and permissions. These may be different people.
+
+The design draws from [ERC-8126](https://eips.ethereum.org/EIPS/eip-8126) for agent verification and [ERC-8196](https://eips.ethereum.org/EIPS/eip-8196) for policy-based execution. It adapts their concepts to Stellar rather than copying Ethereum interfaces. The first release covers a subset of their features and does not claim full ERC compatibility.
+
+## Components and responsibilities
+
+Contracts are planned in Rust with Soroban. The SDK, services, CLI, and demo use TypeScript.
+
+| Location | Responsibility |
 | --- | --- |
-| Agent registry | Stores the agent ID, controller, signing address, and metadata reference. |
-| Verification service | Checks the agent off-chain and publishes its result. |
-| Verification registry | Stores provider-authenticated results, risk scores, expiry, and revocation status. |
-| Smart wallet | Holds funds, checks permissions, and executes allowed actions. |
-| SDK, CLI, and demo | Let owners manage policies and agents submit actions. |
-| History service | Reads contract events and displays activity. |
+| `contracts/agent-registry` | Store agent identities, signing addresses, and metadata references. |
+| `contracts/verification-registry` | Store authenticated provider results and their validity. |
+| `contracts/smart-wallet` | Hold funds, enforce policies, execute actions, and record events. |
+| `contracts/shared-types` | Define common identity, policy, verification, and error types. |
+| `contracts/demo-service` | Provide one restricted contract integration for the demo. |
+| `services/verifier` | Read agent metadata, run checks, and publish results. |
+| `services/submitter` | Simulate transactions, submit them, and track their status. |
+| `services/indexer` | Read events and build a searchable audit history. |
+| `packages/sdk` | Provide reusable clients for these workflows. |
+| `packages/cli` and `apps/demo` | Let developers and owners interact with the system. |
 
-Contracts use Rust and Soroban. The SDK, CLI, and services use TypeScript. Policy checks live inside the wallet so checking limits and moving funds happen in one transaction.
+Policy checks remain inside the wallet contract. This keeps permission checks, spending counters, and fund movements in the same transaction.
 
-## Identity and verification
+## Agent identity and verification
 
-An agent's controller registers its signing address and a metadata URI with a content hash. Changes to the key or metadata create a new identity revision and require fresh verification and permission.
+The controller registers an agent ID, signing address, and metadata URI with a content hash. The verifier fetches the registered metadata and checks that its content matches the hash. Changing the signing key or metadata creates a new identity revision, requiring fresh verification and owner permission.
 
-The verification service reads that registered metadata and performs the supported checks. It publishes the agent ID, revision, provider, risk score, completed checks, evidence hash, and expiry. Private reports stay off-chain; an evidence hash is not a privacy proof.
+ERC-8126 describes off-chain checks covering token, media, code, web, and wallet risks. It uses a risk score from 0 to 100, where lower means lower risk, and builds on ERC-8004 identities. Our first release uses a Stellar registry and clearly identifies which checks are supported.
 
-Each policy names a provider the owner trusts. Missing, expired, revoked, or failed required checks block execution. A newer failure cannot be bypassed by presenting an older passing result. Serious wallet-risk flags also block execution even when the average score is low.
+The verifier publishes a result containing the agent ID and revision, provider, completed checks, risk score, evidence hash, issue time, expiry, and revocation status. Detailed reports stay off-chain. An evidence hash links a result to a report; it is not a zero-knowledge proof.
 
-The first release uses a Stellar agent registry. ERC-8004 integration and broader verification coverage can follow.
+Each policy names a provider the owner trusts. Before every action, the wallet reads that provider's latest result. Missing, expired, revoked, or failed required checks block execution. A newer failure cannot be replaced with an older passing result. Serious wallet-risk flags also block execution regardless of the average score.
 
 ## Wallet and permissions
 
-The owner deposits assets into a separate wallet contract. The agent can spend only those funds under an approved policy.
+The owner deposits supported assets into a separate wallet contract. The agent receives no signing authority over the owner's ordinary Stellar account and never needs the owner's private key.
 
 A policy defines:
 
-- The agent identity, revision, and signing address.
-- The trusted provider, required checks, and maximum risk score.
-- Allowed assets, actions, contracts, and recipients, plus explicit blocked targets.
-- Per-transaction and daily spending limits for each asset.
-- Start time, expiry, and revocation status.
+- **Who:** agent ID, identity revision, and signing address.
+- **Verification:** trusted provider, required checks, maximum result age, and maximum risk score.
+- **Actions:** allowed assets, methods, contracts, and recipients, with explicit blocked targets.
+- **Limits:** per-transaction and daily spending caps for each asset.
+- **Lifetime:** activation time, expiry, and revocation status.
 
-Amounts use integer asset units. Different assets have separate budgets. Daily limits reset at midnight UTC using ledger time; separate policies have separate budgets.
+The risk threshold is called `max_risk_score`. This preserves ERC-8196's rule that scores above the policy threshold are rejected.
 
-Only the owner can create or revoke policies, pause agent access, or withdraw funds. Policies cannot be edited: the owner revokes and replaces them. Empty allowlists permit nothing, and explicit blocks take priority.
+Amounts use integer asset units, and assets are identified by contract address. Daily budgets reset at midnight UTC using ledger time. Each policy has its own budget, so the owner interface must show the combined exposure when approving several policies.
 
-## Execution flow
+Only the owner can approve or revoke policies, pause agent access, or withdraw funds. Permission changes require replacing a policy. Empty allowlists permit nothing, and explicit blocks take priority.
 
-1. The agent builds an action containing the wallet, policy hash, destination, asset, amount, deadline, and a unique sequence number.
-2. The SDK prepares Soroban authorization for the exact request. The agent signs it; a submitter may pay the transaction fee.
-3. The wallet authenticates the agent and checks the policy, sequence number, deadline, and current verification result.
-4. It checks the action and spending limits, updates its counters, and calls the approved asset or contract.
-5. On success, it records an event. If the call fails, the transaction rolls back, including the counters.
+## How an action executes
 
-Contract integrations use explicit methods and validated arguments. Allowing a contract address does not grant access to every method or token approval.
+1. The agent prepares an action with the wallet address, policy hash, action details, deadline, and next policy sequence number. For a transfer, the details include the asset, recipient, and amount.
+2. The SDK prepares authorization for that exact request. The agent signs it, and a submitter may pay the transaction fee. Paying the fee gives the submitter no spending authority.
+3. The wallet authenticates the agent and checks that the policy is active, the identity revision matches, and the request has not expired or already been used.
+4. It reads the current verification result, validates the action, and checks the remaining budget.
+5. It advances the sequence number, updates spending counters, and calls the approved asset or contract. Success records an audit event; failure rolls back the action and counters together.
 
-Revocation takes effect once confirmed on-chain. It blocks later executions, including previously signed requests, but cannot undo completed transfers.
+Contract integrations allow specific methods and validated arguments. An approved contract address does not grant unrestricted access to its methods or token approvals. The first release handles one action per request.
 
-## History and storage
+Revocation blocks subsequent execution once confirmed on-chain, including requests signed earlier. It cannot undo a completed transfer.
 
-Successful executions and owner changes emit events. Each audit entry includes the previous entry's hash, with the latest hash stored in the wallet. The history service uses these events to show activity and detect gaps or changes.
+## History, storage, and trust
 
-Rejected requests appear through simulation errors or transaction results; failed transactions do not leave committed wallet events.
+Successful actions and owner changes emit events. Audit entries include the previous entry's hash, and the wallet stores the latest hash and sequence. The indexer reconstructs this history and can detect missing or altered entries. It has no authority to approve transactions.
 
-Policies, revocations, counters, and sequence numbers use persistent storage. Maintenance extends Soroban storage lifetimes and handles restoration. Restoring data never resets limits or makes an expired policy valid again.
+Rejected actions are shown through simulation errors or transaction results. Failed transactions do not leave committed wallet events.
 
-## First release
+Policies, revocations, spending counters, and sequence numbers use persistent storage. Storage maintenance must extend Soroban data lifetimes and handle restoration. Restoring data must preserve spending history and revocation; it must never reactivate an expired policy.
 
-The testnet demo covers agent registration, provider verification, wallet funding, policy approval, asset transfers, and one restricted contract integration.
+Verification depends on the selected provider and does not guarantee safe behavior. If an agent key is compromised, an attacker may use its remaining permissions. Narrow policies and owner revocation limit that exposure.
 
-Tests must show that valid actions succeed and that overspending, unapproved destinations, stale verification, replayed requests, and revoked policies fail. Signed integration tests also check that failed calls leave balances and spending counters unchanged.
+## First release and validation
 
-Verification is a trust signal, not a guarantee of safe behavior. The wallet's limits remain the final control over every agent action.
+The testnet demo will show registration, verification, wallet funding, policy approval, asset transfers, one restricted contract integration, and revocation.
+
+`tests/integration` will cover signed workflows and transaction rollback. `tests/adversarial` will cover replay, invalid authorization, overspending, unapproved destinations, stale verification, and revoked policies. Public fixtures belong in `tests/fixtures`; deployment records belong in `deployments/testnet`.
+
+Privacy proofs, entropy commit-reveal, TLS credential delegation, external identity registry integration, and arbitrary contract execution are outside the first release. Each requires a separate design before implementation.
