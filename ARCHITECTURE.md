@@ -4,6 +4,12 @@ This project lets a wallet owner give an AI agent limited permission to use fund
 
 **Current status:** The repository contains folders, package configuration, and placeholder modules. The behavior below is the planned design; contracts and services are not implemented or deployed yet.
 
+## Example: paying for services
+
+An agent buys data or API access from providers approved by its owner. The owner deposits funds and permits payments of up to **5 USDC each and 20 USDC per day for seven days**. The agent signs each request; the wallet checks verification and permissions before paying.
+
+A payment of 3 USDC to an approved provider succeeds if enough daily budget remains. A payment of 6 USDC, a payment to an unknown recipient, or any request after confirmed revocation fails. The testnet demo uses a clearly identified test asset to reproduce this flow.
+
 ## Design overview
 
 The system separates two decisions: whether an agent has passed verification, and whether a particular action is allowed. Passing verification does not give an agent permission to spend.
@@ -47,7 +53,17 @@ Policy checks remain inside the wallet contract. This keeps permission checks, s
 
 The controller registers an agent ID, signing address, and metadata URI with a content hash. The verifier fetches the registered metadata and checks that its content matches the hash. Changing the signing key or metadata creates a new identity revision, requiring fresh verification and owner permission.
 
-ERC-8126 describes off-chain checks covering token, media, code, web, and wallet risks. It uses a risk score from 0 to 100, where lower means lower risk, and builds on ERC-8004 identities. Our first release uses a Stellar registry and clearly identifies which checks are supported.
+[ERC-8126](https://eips.ethereum.org/EIPS/eip-8126) describes off-chain checks covering token, media, code, web, and wallet risks, using metadata resolved from an ERC-8004 identity. Its overall risk score is the mean of applicable check scores, from 0 to 100; lower means lower risk. Our adaptation uses a Stellar registry and documents the corresponding checks and any gaps.
+
+Verification has three distinct meanings here:
+
+| Evidence | What it establishes | What it does not establish |
+| --- | --- | --- |
+| Agent signature | Control of the registered signing key for the request. | Correct decisions or a trustworthy host. |
+| Provider assessment | Findings from the stated checks at a particular time. | Guaranteed future behavior or coverage of unperformed checks. |
+| Wallet policy check | Whether the exact action satisfies current permissions and verification requirements. | Whether the action is useful or wise. |
+
+A result records each check as passed, failed, inconclusive, or not applicable. Unsupported checks are identified separately and never counted as passes. Missing or inconclusive required checks deny execution. The implementation mapping will explain how Ethereum-specific token and code checks are adapted to Stellar.
 
 The verifier publishes a result containing the agent ID and revision, provider, completed checks, risk score, evidence hash, issue time, expiry, and revocation status. Detailed reports stay off-chain. An evidence hash links a result to a report; it is not a zero-knowledge proof.
 
@@ -93,10 +109,15 @@ Policies, revocations, spending counters, and sequence numbers use persistent st
 
 Verification depends on the selected provider and does not guarantee safe behavior. If an agent key is compromised, an attacker may use its remaining permissions. Narrow policies and owner revocation limit that exposure.
 
-## First release and validation
+## Delivery milestones and acceptance
 
-The testnet demo will show registration, verification, wallet funding, policy approval, asset transfers, one restricted contract integration, and revocation.
+The [README grant milestones](readme.md#grant-milestones) describe the deliverables. Their technical completion criteria are:
 
-`tests/integration` will cover signed workflows and transaction rollback. `tests/adversarial` will cover replay, invalid authorization, overspending, unapproved destinations, stale verification, and revoked policies. Public fixtures belong in `tests/fixtures`; deployment records belong in `deployments/testnet`.
+1. **Identity and verification:** Register an agent and publish a provider-authenticated result. Tests reject unauthorized publication, invalidate old identity revisions, and enforce result expiry and revocation. Document supported checks, scoring, and deferred EIP features.
+2. **Wallet payments:** Demonstrate a signed permitted transfer. Tests reject invalid signatures, replay, per-payment and daily overspending, unapproved assets and recipients, inactive or expired policies, owner pause, and revoked access. Verification tests reject missing or stale results, excessive risk scores, and serious wallet-risk flags. A failed asset call must roll back counters and balance changes.
+3. **SDK and integration:** Run the full workflow through a public SDK example and CLI commands. Demonstrate one restricted service-contract call and rejection of an unsupported method or invalid arguments.
+4. **Testnet demo:** Publish deployment IDs, transaction links, setup instructions, and a recording of the payment scenario. Rebuild the audit chain from indexed events and match the wallet's stored hash. Run all automated acceptance checks in CI.
+
+Signed workflow tests belong in `tests/integration`; rejection cases belong in `tests/adversarial`. Public fixtures belong in `tests/fixtures` and must be labelled as simulated assessments. Deployment records belong in `deployments/testnet`.
 
 Privacy proofs, entropy commit-reveal, TLS credential delegation, external identity registry integration, and arbitrary contract execution are outside the first release. Each requires a separate design before implementation.
